@@ -1,5 +1,10 @@
 /dts-v1/;
 
+#include <dt-bindings/gpio/gpio.h>
+#include "msm8909-mtp.dtsi"
+#include "msm8909-pm8909.dtsi"
+#include "msm8909-pm8909-mtp.dtsi"
+
 / {
 	#address-cells = <0x02>;
 	#size-cells = <0x02>;
