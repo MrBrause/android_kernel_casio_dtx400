@@ -292,53 +292,12 @@ dtb-$(CONFIG_ARCH_MSM8916) += msm8952-qrd-skum.dtb \
        msm8952-ext-codec-cdp.dtb \
        msm8952-mtp.dtb
 
-dtb-$(CONFIG_ARCH_MSM8909) += msm8909-pm8916-mtp.dtb \
-	msm8909-cdp.dtb \
-        msm8909-1gb-qrd-skuc.dtb \
-        msm8909-1gb-qrd-skue.dtb \
-        msm8909-qrd-skue.dtb \
-	sdw2100-msm8909w-wtp.dtb \
-	sdw2100-apq8009w-wtp.dtb \
-	apq8009w-cdp.dtb \
-	sdw2100-msm8909w-swoctp.dtb \
-	msm8909w-swoctp-circpanel.dtb \
-	apq8009w-swoctp-circpanel.dtb \
-	apq8009w-nowgr-swoctp.dtb \
-	sdw2100-apq8009w-nowgr-swoctp-circpanel.dtb \
-	msm8909-pm8916-cdp.dtb \
-	msm8909w-cdp.dtb \
-	sdw2100-msm8909w-1gb-swoctp-circpanel.dtb \
-	sdw3100-msm8909w-wtp.dtb \
-	sdw2500-msm8909w-wtp.dtb \
-	sdw3100-apq8009w-wtp.dtb \
-	sdw3100-apq8009w-alpha.dtb \
-	sdw2500-apq8009w-wtp.dtb \
-	apq8009-mtp-wcd9326.dtb \
-	msm8909-mtp-wcd9326.dtb \
-	msm8909-mtp-wcd9326-refboard.dtb \
-	msm8909-512mb-mtp-wcd9326-refboard.dtb \
-	msm8909-512mb-cdp-wcd9326-refboard.dtb \
-	msm8909-512mb-rcm-wcd9326-refboard.dtb \
-	msm8909-cdp-wcd9326-refboard.dtb \
-	msm8909-rcm-wcd9326-refboard.dtb \
-	apq8009-mtp-wcd9326-refboard.dtb \
-	apq8009-512mb-mtp-wcd9326-refboard.dtb \
-	apq8009-512mb-cdp-wcd9326-refboard.dtb \
-	apq8009-512mb-rcm-wcd9326-refboard.dtb \
-	apq8009-cdp-wcd9326-refboard.dtb \
-	apq8009-rcm-wcd9326-refboard.dtb \
-	apq8009-robot-refboard.dtb \
-	apq8009-robot-som-refboard.dtb \
-	apq8009-robot-rome.dtb \
-	apq8009-mtp-drone.dtb \
-	apq8009-mtp-wcd9326-excelpoint-refboard.dtb \
-	msm8909-mtp.dtb \
-	msm8909-1gb-mtp.dtb \
-	msm8909-1gb-rcm.dtb \
-	msm8909-pm8916-1gb-rcm.dtb \
-	msm8909-1gb-cdp.dtb \
-	apq8009-ext-codec-dragon.dtb \
-	apq8009-dragon.dtb
+dtb-$(CONFIG_ARCH_MSM8909) += msm8909-pm8909-1gb-mtp-evt1.dtb \
+        msm8909-pm8909-1gb-mtp-evt2.dtb \
+        msm8909-pm8909-1gb-mtp-dvt.dtb \
+        msm8909-pm8909-1gb-mtp-dvt1.dtb \
+        msm8909-pm8909-1gb-mtp-mvt.dtb \
+        msm8909-pm8909-1gb-mtp-mvt1.dtb
 
 ifeq ($(CONFIG_ARM64),y)
 always          := $(dtb-y)
