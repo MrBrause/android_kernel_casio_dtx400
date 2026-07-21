@@ -5264,6 +5264,7 @@
 				qcom,fastchg-ma-cool = <0x258>;
 				qcom,thermal-mitigation = <0x5dc 0x2bc 0x258 0x00>;
 				qcom,bms-psy-name = "bq27542_bms";
+				/delete-property/ qcom,iterm-disabled;
 				qcom,iterm-ma = <0x32>;
 				qcom,iterm-ma-warm = <0x32>;
 				qcom,iterm-ma-cool = <0x32>;
