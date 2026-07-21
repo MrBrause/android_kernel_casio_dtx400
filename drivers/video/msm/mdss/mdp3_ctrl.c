@@ -1530,14 +1530,18 @@ static int mdp3_overlay_queue_buffer(struct msm_fb_data_type *mfd,
 		goto err;
 	}
 
-	if (data.len < dma->source_config.stride * dma->source_config.height) {
-		pr_err("buf size(0x%lx) is smaller than dma config(0x%x)\n",
-			data.len, (dma->source_config.stride *
-			dma->source_config.height));
-		mdp3_put_img(&data, client);
-		rc = -EINVAL;
-		goto err;
-	}
+	/* Size check deferred to mdp3_map_layer in vsync handler;
+         * data.len is 0 here for MDP3_CLIENT_DMA_P (video panel) by design;
+         * result was a blue screen right after splash */
+        if (client != MDP3_CLIENT_DMA_P && client != MDP3_CLIENT_PPP &&
+                data.len < dma->source_config.stride * dma->source_config.height) {
+                pr_err("buf size(0x%lx) is smaller than dma config(0x%x)\n",
+                        data.len, (dma->source_config.stride *
+                        dma->source_config.height));
+                mdp3_put_img(&data, client);
+                rc = -EINVAL;
+                goto err;
+        }
 	rc = mdp3_bufq_push(&mdp3_session->bufq_in, &data);
 	if (rc) {
 		pr_err("fail to queue the overlay buffer, buffer drop\n");
