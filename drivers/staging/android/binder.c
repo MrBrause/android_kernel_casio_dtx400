@@ -4817,6 +4817,31 @@ static long binder_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		}
 		break;
 	}
+	case BINDER_GET_NODE_INFO_FOR_REF:
+                /* stub for Android 13 compatibility - not supported on 3.18 */
+                ret = -EOPNOTSUPP;
+                break;
+        case BINDER_SET_CONTEXT_MGR_EXT: {
+                /* Fall back to basic set_ctx_mgr */
+                struct flat_binder_object fbo;
+                if (copy_from_user(&fbo, ubuf, sizeof(fbo))) {
+                        ret = -EINVAL;
+                        goto err;
+                }
+                ret = binder_ioctl_set_ctx_mgr(filp);
+                break;
+        }
+        case BINDER_FREEZE:
+                /* stub - freeze not supported on 3.18 */
+                break;
+        case BINDER_GET_FROZEN_INFO:
+                /* stub - return not frozen */
+                if (clear_user(ubuf, sizeof(struct binder_frozen_status_info)))
+                        ret = -EFAULT;
+                break;
+        case BINDER_ENABLE_ONEWAY_SPAM_DETECTION:
+                /* stub - silently ignore, not supported on 3.18 */
+                break;
 	default:
 		ret = -EINVAL;
 		goto err;

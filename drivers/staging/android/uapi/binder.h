@@ -254,6 +254,33 @@ struct binder_node_debug_info {
 #define BINDER_VERSION			_IOWR('b', 9, struct binder_version)
 #define BINDER_GET_NODE_DEBUG_INFO	_IOWR('b', 11, struct binder_node_debug_info)
 
+struct binder_node_info_for_ref {
+    __u32 handle;
+    __u32 strong_count;
+    __u32 weak_count;
+    __u32 reserved1;
+    __u32 reserved2;
+    __u32 reserved3;
+};
+
+struct binder_freeze_info {
+    __u32 pid;
+    __u32 enable;
+    __u32 timeout_ms;
+};
+
+struct binder_frozen_status_info {
+    __u32 pid;
+    __u32 sync_recv;
+    __u32 async_recv;
+};
+
+#define BINDER_GET_NODE_INFO_FOR_REF  _IOWR('b', 12, struct binder_node_info_for_ref)
+#define BINDER_SET_CONTEXT_MGR_EXT    _IOW('b', 13, struct flat_binder_object)
+#define BINDER_FREEZE                 _IOW('b', 14, struct binder_freeze_info)
+#define BINDER_GET_FROZEN_INFO        _IOWR('b', 15, struct binder_frozen_status_info)
+#define BINDER_ENABLE_ONEWAY_SPAM_DETECTION _IOW('b', 16, __u32)
+
 /*
  * NOTE: Two special error codes you should check for when calling
  * in to the driver are:
