@@ -9116,6 +9116,9 @@
 			pinctrl-names = "tlmm_gpio_key_active\0tlmm_gpio_key_suspend";
 			pinctrl-0 = <0x117>;
 			pinctrl-1 = <0x118>;
+			/delete-node/ camera_focus;
+			/delete-node/ camera_snapshot;
+			/delete-node/ vol_up;
 
 			scan_front_key {
 				label = "scan_front_key";
