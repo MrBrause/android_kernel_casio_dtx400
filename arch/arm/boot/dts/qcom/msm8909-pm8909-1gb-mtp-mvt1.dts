@@ -5425,7 +5425,7 @@
 			qcom,master-id = <0x56>;
 
 			pca9535@20 {
-				compatible = "nxp,pca9535a";
+				compatible = "nxp,pca9535";
 				reg = <0x20>;
 				gpio-controller;
 				#gpio-cells = <0x02>;
@@ -5438,7 +5438,7 @@
 			};
 
 			pca9535@22 {
-				compatible = "nxp,pca9535b";
+				compatible = "nxp,pca9535";
 				reg = <0x22>;
 				gpio-controller;
 				#gpio-cells = <0x02>;
@@ -5451,7 +5451,7 @@
 			};
 
 			pca9535@25 {
-				compatible = "nxp,pca9535c";
+				compatible = "nxp,pca9535";
 				reg = <0x25>;
 				gpio-controller;
 				#gpio-cells = <0x02>;
@@ -5463,10 +5463,11 @@
 				gpio-pca9535c-en = <0xed 0x0a 0x00>;
 				linux,phandle = <0x10e>;
 				phandle = <0x10e>;
+				status="disabled";
 			};
 
 			pca9535@24 {
-				compatible = "nxp,pca9535d";
+				compatible = "nxp,pca9535";
 				reg = <0x24>;
 				gpio-controller;
 				#gpio-cells = <0x02>;
