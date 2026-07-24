@@ -5383,7 +5383,7 @@
 				rohm,irq-gpio = <0x9e 0x08 0x2008>;
 				rohm,reset-gpio = <0xed 0x04 0x00>;
 				rohm,level-shift-gpio = <0xee 0x00 0x00>;
-				status = "ok";
+				status = "disabled";
 			};
 
 			rohm@40 {
@@ -5391,12 +5391,16 @@
 				reg = <0x40>;
 				interrupt-parent = <0x9e>;
 				interrupts = <0x08 0x2008>;
-				vdd-supply = <0x97>;
-				bu21029,vcc-3v-en = <0xed 0x00 0x00>;
-				bu21029,irq-gpio = <0x9e 0x08 0x2008>;
-				bu21029,reset-gpio = <0xed 0x04 0x00>;
-				bu21029,level-shift-gpio = <0xee 0x00 0x00>;
-				status = "ok";
+				reset-gpios = <0xed 0x04 0x01>;       /* expander-b pin 4, active-low */
+				vdd-supply = <&ts_vdd_vreg>;
+				touchscreen-min-x = <680>;
+				touchscreen-size-x = <2811>;      /* max = 680 + 2811 - 1 = 3490 */
+				touchscreen-min-y = <350>;
+				touchscreen-size-y = <3321>;      /* max = 350 + 3321 - 1 = 3670 */
+				touchscreen-inverted-y;
+				touchscreen-max-pressure = <1000>;
+				level-shift-gpios = <0xee 0x00 0x00>;
+				rohm,x-plate-ohms = <600>;
 			};
 		};
 
@@ -9192,6 +9196,16 @@
 				gpio-key,wakeup;
 				debounce-interval = <0x0f>;
 			};
+		};
+
+		ts_vdd_vreg: ts_vdd {
+			compatible = "regulator-fixed";
+			regulator-name = "ts_vdd";
+			regulator-min-microvolt = <3000000>;
+			regulator-max-microvolt = <3000000>;
+			gpio = <0xed 0x00 0x00>;
+			enable-active-high;
+			startup-delay-us = <10000>;
 		};
 
 		sound {
