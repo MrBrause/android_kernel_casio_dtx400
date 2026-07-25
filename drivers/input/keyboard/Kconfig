@@ -503,6 +503,17 @@ config KEYBOARD_SAMSUNG
 	  To compile this driver as a module, choose M here: the
 	  module will be called samsung-keypad.
 
+config KEYBOARD_SN7326
+	tristate "Si-En SN7326 I2C matrix keypad controller"
+	depends on I2C && OF
+	select INPUT_MATRIXKMAP
+	help
+	  Say Y here if your board uses a Si-En SN7326 I2C keypad
+	  scanner, as found in the Casio DT-X400.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called sn7326.
+
 config KEYBOARD_GOLDFISH_EVENTS
 	depends on GOLDFISH
 	tristate "Generic Input Event device for Goldfish"
