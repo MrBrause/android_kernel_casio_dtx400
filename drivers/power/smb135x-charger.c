@@ -728,6 +728,8 @@ static enum power_supply_property smb135x_battery_properties[] = {
 	POWER_SUPPLY_PROP_HEALTH,
 	POWER_SUPPLY_PROP_TECHNOLOGY,
 	POWER_SUPPLY_PROP_SYSTEM_TEMP_LEVEL,
+	POWER_SUPPLY_PROP_VOLTAGE_NOW,
+	POWER_SUPPLY_PROP_TEMP,
 };
 
 static int smb135x_get_prop_batt_status(struct smb135x_chg *chip)
@@ -819,6 +821,32 @@ static int smb135x_get_prop_batt_capacity(struct smb135x_chg *chip)
 	}
 
 	return DEFAULT_BATT_CAPACITY;
+}
+
+#define DEFAULT_BATT_VOLTAGE	0
+static int smb135x_get_prop_batt_voltage(struct smb135x_chg *chip)
+{
+	union power_supply_propval ret = {0, };
+
+	if (chip->bms_psy) {
+		chip->bms_psy->get_property(chip->bms_psy,
+				POWER_SUPPLY_PROP_VOLTAGE_NOW, &ret);
+		return ret.intval;
+	}
+	return DEFAULT_BATT_VOLTAGE;
+}
+
+#define DEFAULT_BATT_TEMP	250
+static int smb135x_get_prop_batt_temp(struct smb135x_chg *chip)
+{
+	union power_supply_propval ret = {0, };
+
+	if (chip->bms_psy) {
+		chip->bms_psy->get_property(chip->bms_psy,
+				POWER_SUPPLY_PROP_TEMP, &ret);
+		return ret.intval;
+	}
+	return DEFAULT_BATT_TEMP;
 }
 
 static int smb135x_get_prop_batt_health(struct smb135x_chg *chip)
@@ -1651,6 +1679,12 @@ static int smb135x_battery_get_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_SYSTEM_TEMP_LEVEL:
 		val->intval = chip->therm_lvl_sel;
+		break;
+	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
+		val->intval = smb135x_get_prop_batt_voltage(chip);
+		break;
+	case POWER_SUPPLY_PROP_TEMP:
+		val->intval = smb135x_get_prop_batt_temp(chip);
 		break;
 	default:
 		return -EINVAL;
