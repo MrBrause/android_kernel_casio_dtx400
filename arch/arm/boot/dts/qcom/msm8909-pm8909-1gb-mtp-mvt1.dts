@@ -5534,8 +5534,33 @@
 				reg = <0x58>;
 				interrupt-parent = <0x9e>;
 				interrupts = <0x5c 0x2008>;
-				sn,rest-gpio = <0xed 0x09 0x00>;
-				sn7326,keymap-value = <0x3e 0x1069 0x2005 0x3003 0x10190 0x1103b 0x12006 0x1303c 0x20073 0x21008 0x22007 0x23002 0x30072 0x3100b 0x3206c 0x3306a 0x40039 0x41009 0x42067 0x5003d 0x5100a 0x52004>;
+				reset-gpios = <0xed 0x09 0x00>;
+				keypad,num-rows = <0x06>;
+				keypad,num-columns = <0x08>;
+				linux,keymap = <
+					0x0000003e      /* r0c0 F4          */
+					0x00010069      /* r0c1 LEFT        */
+					0x00020005      /* r0c2 4           */
+					0x00030003      /* r0c3 2           */
+					0x01000190      /* r1c0 KEYPAD_MODE (400) */
+					0x0101003b      /* r1c1 F1          */
+					0x01020006      /* r1c2 5           */
+					0x0103003c      /* r1c3 F2          */
+					0x02000073      /* r2c0 VOLUME_UP   */
+					0x02010008      /* r2c1 7           */
+					0x02020007      /* r2c2 6           */
+					0x02030002      /* r2c3 1           */
+					0x03000072      /* r3c0 VOLUME_DOWN */
+					0x0301000b      /* r3c1 0           */
+					0x0302006c      /* r3c2 DOWN        */
+					0x0303006a      /* r3c3 RIGHT       */
+					0x04000039      /* r4c0 SPACE       */
+					0x04010009      /* r4c1 8           */
+					0x04020067      /* r4c2 UP          */
+					0x0500003d      /* r5c0 F3          */
+					0x0501000a      /* r5c1 9           */
+					0x05020004      /* r5c2 3           */
+				>;
 			};
 		};
 
