@@ -48,6 +48,8 @@
 #define POLL_INTERVAL_FAST	(5 * HZ)
 #define POLL_INTERVAL_NORM	(10 * HZ)
 
+#define POLL_INTERVAL_CONFIRM	(2 * HZ)
+
 struct bq27541 {
 	struct device		*dev;
 	int			gpio;
@@ -62,6 +64,9 @@ struct bq27541 {
 	int			temp_dk;	/* 0.1 K */
 	int			flags;
 	bool			online;
+
+	int			fail_count;
+	bool			drop_pending;
 };
 
 /* --- HDQ bit-bang primitives; timing critical, irqs off per bit --- */
@@ -166,7 +171,7 @@ static void bq27541_poll(struct work_struct *work)
 {
 	struct bq27541 *bq = container_of(work, struct bq27541, work.work);
 	int soc, volt, temp, flags, curr;
-	bool changed = false;
+	unsigned long delay;
 
 	soc   = bq27541_read_word(bq, BQ27541_REG_SOC);
 	volt  = bq27541_read_word(bq, BQ27541_REG_VOLT);
@@ -174,29 +179,62 @@ static void bq27541_poll(struct work_struct *work)
 	flags = bq27541_read_word(bq, BQ27541_REG_FLAGS);
 	curr  = (s16)bq27541_read_word(bq, BQ27541_REG_AI);
 
-	/* all-ones reads mean no gauge answered (line idle high) */
-	if (soc == 0xffff || volt == 0xffff) {
-		if (bq->online) {
+	/* transport errors: keep last-good, count towards absence */
+	if (soc < 0 || volt < 0 || temp < 0 || flags < 0) {
+		if (++bq->fail_count > 5 && bq->online) {
 			dev_warn(bq->dev, "gauge not responding\n");
 			bq->online = false;
+			power_supply_changed(&bq->psy);
 		}
-	} else {
+		goto resched;
+	}
+	bq->fail_count = 0;
+
+	/* plausibility gate: physically impossible snapshots */
+	if (soc > 100 || volt < 2500 || volt > 4500 ||
+	    temp < 2231 || temp > 3431) {		/* -50..70 C */
+		dev_warn_ratelimited(bq->dev,
+			"implausible read rejected: soc=%d mv=%d dk=%d\n",
+			soc, volt, temp);
+		goto resched;
+	}
+
+	/* contradiction gate: near-empty SOC on a healthy voltage */
+	if (soc < 10 && volt > 3800) {
+		dev_warn_ratelimited(bq->dev,
+			"contradictory read rejected: soc=%d at %dmV\n",
+			soc, volt);
+		goto resched;
+	}
+
+	/* large sudden SOC drop: confirm on a fast follow-up poll */
+	if (bq->online && bq->soc - soc > 10 && !bq->drop_pending) {
+		bq->drop_pending = true;
+		dev_warn(bq->dev, "SOC drop %d->%d, awaiting confirmation\n",
+			 bq->soc, soc);
+		schedule_delayed_work(&bq->work, POLL_INTERVAL_CONFIRM);
+		return;
+	}
+	bq->drop_pending = false;
+
+	if (!bq->online || soc != bq->soc || flags != bq->flags) {
 		bq->online = true;
-		if (soc != bq->soc || flags != bq->flags)
-			changed = true;
-		bq->soc     = clamp(soc, 0, 100);
+		bq->soc     = soc;
 		bq->volt_mv = volt;
 		bq->temp_dk = temp;
 		bq->flags   = flags;
 		bq->curr_ma = curr;
+		power_supply_changed(&bq->psy);
+	} else {
+		bq->volt_mv = volt;
+		bq->temp_dk = temp;
+		bq->curr_ma = curr;
 	}
 
-	if (changed)
-		power_supply_changed(&bq->psy);
-
-	schedule_delayed_work(&bq->work,
-			      bq->soc < 20 ? POLL_INTERVAL_FAST
-					   : POLL_INTERVAL_NORM);
+resched:
+	delay = (bq->online && bq->soc < 20) ? POLL_INTERVAL_FAST
+					     : POLL_INTERVAL_NORM;
+	schedule_delayed_work(&bq->work, delay);
 }
 
 static enum power_supply_property bq27541_props[] = {
