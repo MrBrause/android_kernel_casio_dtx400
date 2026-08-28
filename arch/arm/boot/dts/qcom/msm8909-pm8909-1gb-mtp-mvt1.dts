@@ -9253,6 +9253,7 @@
 			qcom,split-a2dp;
 			qcom,audio-routing = "RX_BIAS\0MCLK\0SPK_RX_BIAS\0MCLK\0INT_LDO_H\0MCLK\0MIC BIAS External\0Handset Mic\0MIC BIAS Internal2\0Headset Mic\0MIC BIAS External\0Secondary Mic\0AMIC1\0MIC BIAS External\0AMIC2\0MIC BIAS Internal2\0AMIC3\0MIC BIAS External";
 			qcom,msm-gpios = "pri_i2s";
+			/delete-property/ qcom,cdc-us-euro-gpios;
 			qcom,pinctrl-names = "all_off\0pri_i2s_act";
 			pinctrl-names = "all_off\0pri_i2s_act";
 			pinctrl-0 = <0x119>;
