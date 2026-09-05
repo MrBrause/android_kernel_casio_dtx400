@@ -1,7 +1,0 @@
-config HSM
-        bool "HSM N670x imager"
-        depends on I2C && GPIO_PCA953X
-        help
-          Honeywell/Newland N670x 2D imager (barcode scan engine) on the
-          Casio DT-X400. Binds via I2C (compatible "hsm,imager") and drives
-          the scanner power sequence + engine detection.

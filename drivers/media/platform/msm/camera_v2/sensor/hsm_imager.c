@@ -37,6 +37,16 @@
 #include <linux/kobject.h>
 #include <linux/sysfs.h>
 
+/* Phase B: MSM camera_v2 sensor framework (v4l2 capture registration).
+ * msm_sensor.h transitively provides <media/v4l2-subdev.h> and
+ * msm_camera_i2c.h; cam_soc_api.h provides msm_camera_i2c_dev_get_clk_info().
+ * These resolve via the sensor/Makefile ccflags -I paths (camera_v2,
+ * camera_v2/common, camera_v2/sensor/io). */
+#include "msm_sd.h"
+#include "msm_sensor.h"
+#include "cam_soc_api.h"
+#include "camera.h"		/* camera_init_v4l2() */
+
 #define HSM_DRV_NAME		"hsm_imager"
 
 /* I2C addresses */
@@ -46,6 +56,11 @@
 /* Imager chip identification */
 #define HSM_N670X_ID_REG	0x3000
 #define HSM_N670X_ID_VALUE	0x0356
+
+/* v4l2 subdev name fallback. The name is read from DT "qcom,sensor-name"
+ * (generic across variants); this is used only if that property is absent.
+ * Matches stock ("n670x <bus>-<addr>") so libHsmKil finds the sensor. */
+#define HSM_SENSOR_NAME		"n670x"
 
 /* Engine PSoC commands (1st byte written before the read phase) */
 #define HSM_PSOC_CMD_ENGINE_ID	0x00	/* returns 4 bytes */
@@ -107,10 +122,30 @@ struct hsm_ctrl {
 
 	struct kobject		*kobj;		/* /sys/.../scanner ScanSetting iface */
 
-	/* TODO(phaseB): embedded struct msm_sensor_ctrl_t s_ctrl; and the
-	 * v4l2 subdev, media entity, clk info, handed to
-	 * msm_sensor_driver_parse(&s_ctrl) for camera-pipeline registration. */
+	/* Phase B: embedded MSM camera sensor framework control. The framework
+	 * (msm_sensor_driver_parse) operates on &s_ctrl to register the v4l2
+	 * subdev / media entity / capture pipeline. We override only func_tbl
+	 * (power ops) because the imager has no DT power-setting array - its
+	 * power is the bespoke hsm sequence. */
+	struct msm_sensor_ctrl_t	s_ctrl;
+	struct msm_sensor_fn_t		func_tbl;
 };
+
+#define to_hsm_ctrl(sc) container_of(sc, struct hsm_ctrl, s_ctrl)
+
+/*
+ * msm_sensor_driver_parse() is defined in msm_sensor_driver.c. In the stock
+ * tree it is file-static; to call it from here it must be exported:
+ *   - msm_sensor_driver.c: remove "static" from its definition
+ *   - msm_sensor.h: add   int32_t msm_sensor_driver_parse(struct msm_sensor_ctrl_t *);
+ * This local prototype lets hsm_imager.c compile; the symbol resolves at link
+ * once the "static" is removed (same as the stock hsm driver required).
+ */
+extern int32_t msm_sensor_driver_parse(struct msm_sensor_ctrl_t *s_ctrl);
+
+/* v4l2 subdev fops for the imager's device node (filled via
+ * msm_cam_copy_v4l2_subdev_fops in the subdev-creation step). */
+static struct v4l2_file_operations hsm_v4l2_subdev_fops;
 
 /* Forward decl for pca9535c wrapper (separate small driver / this TU).
  * TODO: provide pca9535c_power_control() — wraps the in-tree gpio-pca953x
@@ -603,6 +638,173 @@ static void hsm_sysfs_remove(struct hsm_ctrl *h)
 }
 
 /* ------------------------------------------------------------------ */
+/* Phase B: MSM camera sensor framework integration                    */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Custom power ops. The framework's default subdev .s_power (msm_sensor_power)
+ * routes to func_tbl->sensor_power_up/down. Because the imager has no DT
+ * power-setting array, we wire the real hsm power sequence here (reusing the
+ * Phase A helpers).
+ */
+static int hsm_sensor_power_up(struct msm_sensor_ctrl_t *s_ctrl)
+{
+	struct hsm_ctrl *h = to_hsm_ctrl(s_ctrl);
+	int rc;
+
+	dev_info(h->dev, "hsm_sensor_power_up\n");
+	rc = hsm_supply_enable(h, true);
+	if (rc) {
+		dev_err(h->dev, "power_up: supply enable failed %d\n", rc);
+		return rc;
+	}
+	hsm_gpio_set(h, HSM_GPIO_POWER_ENABLE, 1);
+	msleep(HSM_SETTLE_MS);
+	return 0;
+}
+
+static int hsm_sensor_power_down(struct msm_sensor_ctrl_t *s_ctrl)
+{
+	struct hsm_ctrl *h = to_hsm_ctrl(s_ctrl);
+
+	dev_info(h->dev, "hsm_sensor_power_down\n");
+	hsm_gpio_set(h, HSM_GPIO_POWER_ENABLE, 0);
+	hsm_supply_enable(h, false);
+	return 0;
+}
+
+static int hsm_sensor_match_id(struct msm_sensor_ctrl_t *s_ctrl)
+{
+	struct hsm_ctrl *h = to_hsm_ctrl(s_ctrl);
+
+	if (h->chip_id == HSM_N670X_ID_VALUE)
+		return 0;
+	dev_err(h->dev, "match_id: chip 0x%04x != 0x%04x\n",
+		h->chip_id, HSM_N670X_ID_VALUE);
+	return -ENODEV;
+}
+
+/*
+ * Register the (already-detected) imager with the MSM camera sensor framework
+ * so it appears as a v4l2 subdev the capture pipeline / libHsmKil can stream.
+ * Verbose logging pinpoints where msm_sensor_driver_parse fails on first probe
+ * (most likely DT parsing of the imager node).
+ */
+static int hsm_register_msm_sensor(struct hsm_ctrl *h)
+{
+	struct msm_sensor_ctrl_t *s = &h->s_ctrl;
+	int rc;
+
+	dev_info(h->dev, "hsm_register_msm_sensor: begin\n");
+
+	s->of_node            = h->client->dev.of_node;
+	s->sensor_device_type = MSM_CAMERA_I2C_DEVICE;
+
+	/* Override only the power/match ops; leave subdev_ops + i2c_func_tbl
+	 * NULL so msm_sensor_init_default_params() fills framework defaults. */
+	h->func_tbl.sensor_power_up   = hsm_sensor_power_up;
+	h->func_tbl.sensor_power_down = hsm_sensor_power_down;
+	h->func_tbl.sensor_match_id   = hsm_sensor_match_id;
+	s->func_tbl = &h->func_tbl;
+
+	dev_info(h->dev, "hsm_register_msm_sensor: msm_sensor_driver_parse\n");
+	rc = msm_sensor_driver_parse(s);
+	if (rc < 0) {
+		dev_err(h->dev, "msm_sensor_driver_parse failed: %d\n", rc);
+		return rc;
+	}
+	dev_info(h->dev, "hsm_register_msm_sensor: parse OK id=%u\n", s->id);
+
+	if (s->sensor_i2c_client) {
+		s->sensor_i2c_client->client = h->client;
+		if (s->sensordata)
+			s->sensordata->power_info.dev = &h->client->dev;
+
+		rc = msm_camera_i2c_dev_get_clk_info(
+			&s->sensor_i2c_client->client->dev,
+			&s->sensordata->power_info.clk_info,
+			&s->sensordata->power_info.clk_ptr,
+			&s->sensordata->power_info.clk_info_size);
+		if (rc < 0) {
+			dev_err(h->dev, "i2c_dev_get_clk_info failed: %d\n", rc);
+			return rc;
+		}
+	}
+
+	/*
+	 * Create the v4l2 subdev device node. This replicates the framework's
+	 * static msm_sensor_driver_create_i2c_v4l_subdev() (i2c variant), which
+	 * msm_sensor_driver_parse() does NOT do itself. Without this the sensor
+	 * is registered in g_sctrl[] but no /dev/v4l-subdevN node appears.
+	 * msm_sd_register / camera_init_v4l2 / msm_cam_copy_v4l2_subdev_fops are
+	 * all exported (msm_sd.h, camera/camera.h).
+	 */
+	{
+		uint32_t session_id = 0;
+
+		if (!s->bypass_video_node_creation) {
+			rc = camera_init_v4l2(&h->client->dev, &session_id);
+			if (rc < 0) {
+				dev_err(h->dev, "camera_init_v4l2 failed: %d\n", rc);
+				return rc;
+			}
+		}
+
+		/*
+		 * Determine the v4l2 subdev name. Prefer the DT "qcom,sensor-name"
+		 * (keeps the driver generic across engine variants); fall back to
+		 * HSM_SENSOR_NAME. The framework's sensordata->sensor_name comes
+		 * back NULL from parse on this node, so we read the DT directly.
+		 */
+		{
+			const char *sname = NULL;
+
+			of_property_read_string(h->client->dev.of_node,
+						"qcom,sensor-name", &sname);
+			if (!sname || !sname[0])
+				sname = HSM_SENSOR_NAME;
+
+			snprintf(s->msm_sd.sd.name, sizeof(s->msm_sd.sd.name),
+				 "%s", sname);
+			v4l2_i2c_subdev_init(&s->msm_sd.sd, h->client,
+					     s->sensor_v4l2_subdev_ops);
+			/*
+			 * v4l2_i2c_subdev_init() overwrites sd.name with the i2c
+			 * driver name ("hsm_imager <bus>-<addr>"). Stock exposes
+			 * the sensor as "<sensor-name> <bus>-<addr>" and libHsmKil
+			 * may look it up by that name, so force it back.
+			 */
+			snprintf(s->msm_sd.sd.name, sizeof(s->msm_sd.sd.name),
+				 "%s %d-%04x", sname,
+				 i2c_adapter_id(h->client->adapter),
+				 h->client->addr);
+		}
+		v4l2_set_subdevdata(&s->msm_sd.sd, h->client);
+		s->msm_sd.sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
+		media_entity_init(&s->msm_sd.sd.entity, 0, NULL, 0);
+		s->msm_sd.sd.entity.type = MEDIA_ENT_T_V4L2_SUBDEV;
+		s->msm_sd.sd.entity.group_id = MSM_CAMERA_SUBDEV_SENSOR;
+		s->msm_sd.sd.entity.name = s->msm_sd.sd.name;
+		if (s->sensordata->sensor_info)
+			s->sensordata->sensor_info->session_id = session_id;
+		s->msm_sd.close_seq = MSM_SD_CLOSE_2ND_CATEGORY | 0x3;
+
+		rc = msm_sd_register(&s->msm_sd);
+		if (rc < 0) {
+			dev_err(h->dev, "msm_sd_register failed: %d\n", rc);
+			return rc;
+		}
+		msm_cam_copy_v4l2_subdev_fops(&hsm_v4l2_subdev_fops);
+		s->msm_sd.sd.devnode->fops = &hsm_v4l2_subdev_fops;
+		dev_info(h->dev, "v4l2 subdev '%s' registered (session %u)\n",
+			 s->msm_sd.sd.name, session_id);
+	}
+
+	dev_info(h->dev, "hsm_register_msm_sensor: SUCCESS (n670x registered)\n");
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* Probe / remove                                                      */
 /* ------------------------------------------------------------------ */
 
@@ -705,22 +907,27 @@ static int hsm_probe(struct i2c_client *client,
 		dev_warn(h->dev, "sysfs create failed: %d (continuing)\n", rc);
 
 	/*
-	 * TODO(phaseB): register with the MSM camera_v2 sensor framework:
-	 *   - embed struct msm_sensor_ctrl_t, set of_node/func_tbl/mclk
-	 *   - v4l2_i2c_subdev_init(&s_ctrl->msm_sd.sd, client, &hsm_subdev_ops)
-	 *   - media_entity_init(...)
-	 *   - msm_sensor_driver_parse(&s_ctrl)
-	 *   - msm_camera_i2c_dev_get_clk_info(...)
-	 * which makes it appear as "n670x <bus>-0018" in the camera pipeline.
-	 *
-	 * Stock powers the engine back down after a successful probe; we keep
-	 * it powered in Phase A only long enough to confirm detection, then
-	 * drop it here to match stock behaviour.
+	 * Phase B: register with the MSM camera_v2 sensor framework so the
+	 * imager appears as a v4l2 subdev (n670x <bus>-0018) that the capture
+	 * pipeline / libHsmKil can stream from.
+	 */
+	rc = hsm_register_msm_sensor(h);
+	if (rc) {
+		dev_err(h->dev, "msm_sensor registration failed: %d\n", rc);
+		goto err_power;
+	}
+
+	/*
+	 * Stock powers the engine DOWN after a successful probe; the framework
+	 * powers it back up for capture via func_tbl->sensor_power_up.
 	 */
 	hsm_gpio_set(h, HSM_GPIO_POWER_ENABLE, 0);
 	hsm_supply_enable(h, false);
 
-	dev_info(h->dev, "N670x scanner successfully probed (Phase A)\n");
+	/* NOTE: do NOT free h on success - the embedded s_ctrl is now
+	 * registered with the framework (referenced via g_sctrl[]). h lives
+	 * for the driver lifetime (held via i2c_set_clientdata). */
+	dev_info(h->dev, "N670x scanner successfully probed (Phase B, registered)\n");
 	return 0;
 
 err_power:
@@ -793,5 +1000,5 @@ static void __exit hsm_module_exit(void)
 module_init(hsm_module_init);
 module_exit(hsm_module_exit);
 
-MODULE_DESCRIPTION("Honeywell/Newland N670x imager (Casio DT-X400) - reconstructed");
+MODULE_DESCRIPTION("Honeywell/Newland N670x imager (Casio DT-X400) - Phase B msm_sensor");
 MODULE_LICENSE("GPL v2");

@@ -1168,7 +1168,7 @@ FREE_SENSOR_DATA:
 	return rc;
 }
 
-static int32_t msm_sensor_driver_parse(struct msm_sensor_ctrl_t *s_ctrl)
+int32_t msm_sensor_driver_parse(struct msm_sensor_ctrl_t *s_ctrl)
 {
 	int32_t                   rc = 0;
 
