@@ -5334,6 +5334,7 @@
 				clocks = <0x21 0x498938e5>;
 				clock-names = "ref_clk";
 				qcom,nq-clkreq = <0xf3 0x02 0x00>;
+				status = "disabled";
 			};
 		};
 
@@ -5471,7 +5472,7 @@
 				gpio-pca9535c-en = <0xed 0x0a 0x00>;
 				linux,phandle = <0x10e>;
 				phandle = <0x10e>;
-				status="disabled";
+				status="ok";
 			};
 
 			pca9535@24 {
@@ -5768,6 +5769,7 @@
 				qcom,cci-master = <0x00>;
 				linux,phandle = <0x106>;
 				phandle = <0x106>;
+				status="disabled";
 			};
 		};
 
