@@ -5599,7 +5599,6 @@
 				qcom,gpio-req-tbl-label = "CAM_VAF\0CAM_AF_PWDM";
 				linux,phandle = <0x105>;
 				phandle = <0x105>;
-				status = "disabled";
 			};
 
 			qcom,eeprom@20 {
@@ -5640,7 +5639,6 @@
 				qcom,clock-rates = <0x124f800 0x00>;
 				linux,phandle = <0x107>;
 				phandle = <0x107>;
-				status = "disabled";
 			};
 
 			qcom,camera@0 {
@@ -5680,7 +5678,6 @@
 				clocks = <0x17 0x266b3853 0x17 0x80902deb>;
 				clock-names = "cam_src_clk\0cam_clk";
 				qcom,clock-rates = <0x16e3600 0x00>;
-				status = "disabled";
 			};
 
 			qcom,camera@1 {
