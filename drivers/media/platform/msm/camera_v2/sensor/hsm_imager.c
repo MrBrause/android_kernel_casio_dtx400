@@ -36,6 +36,7 @@
 #include <linux/regulator/consumer.h>
 #include <linux/kobject.h>
 #include <linux/sysfs.h>
+#include <linux/uaccess.h>	/* copy_from_user / copy_to_user (IIC passthrough) */
 
 /* Phase B: MSM camera_v2 sensor framework (v4l2 capture registration).
  * msm_sensor.h transitively provides <media/v4l2-subdev.h> and
@@ -61,6 +62,50 @@
  * (generic across variants); this is used only if that property is absent.
  * Matches stock ("n670x <bus>-<addr>") so libHsmKil finds the sensor. */
 #define HSM_SENSOR_NAME		"n670x"
+
+/*
+ * Custom HSM v4l2 ioctls the userspace stack (libHsmKil) sends to the sensor
+ * subdev. Numbers reverse-engineered from the stock hsm_ioctl_common handler:
+ * all _IOWR('V', nr, ...) with the sizes below (matches the exact command
+ * words 0xc0xx56cX seen in the stock driver's dispatch table).
+ *   0xc00256c7 GPIO_SET  0xc00256c8 GPIO_GET  0xc00256cb SUPPLY  0xc00256cc PWRSTATE
+ *   0xc00c56c2 WRITE_IIC 0xc00c56c3 READ_IIC  0xc00c56ca CHANGED  0xc00856c9 RDRW
+ *   0xc02c56c0 GET_PROPERTIES (44-byte struct)  0xc0a856c1 = VIDIOC_MSM_SENSOR_CFG
+ */
+#define VIDIOC_HSM_GET_PROPERTIES	0xc02c56c0u	/* _IOWR('V',0xc0,[44]) */
+#define VIDIOC_HSM_WRITE_IIC		0xc00c56c2u
+#define VIDIOC_HSM_READ_IIC		0xc00c56c3u
+#define VIDIOC_HSM_GPIO_SET		0xc00256c7u
+#define VIDIOC_HSM_GPIO_GET		0xc00256c8u
+#define VIDIOC_HSM_RDRW			0xc00856c9u
+#define VIDIOC_HSM_CHANGED_FLAG		0xc00c56cau
+#define VIDIOC_HSM_SUPPLY_ENABLE	0xc00256cbu
+#define VIDIOC_HSM_POWER_STATE		0xc00256ccu
+
+/*
+ * HSM_GET_PROPERTIES payload (44 bytes). Field layout from the stock
+ * hsm_ioctl_common decompile (uint array indices):
+ *   [0] version   (in: must be 1)
+ *   [1] reserved
+ *   [2] width     = 1280
+ *   [3] height    = 800
+ *   [4] clk1      (ctx+0x114 mclk; not validated by libHsmKil)
+ *   [5] b0..b3    (ctx+0x1c4=slave 0x18, 0x1c5=0x40 psoc, 0x1c6, 0x1c7)
+ *   [6] clk2      (ctx+0x118)
+ *   [7] flags     = 0x8001
+ *   [8..10] reserved
+ */
+struct hsm_properties {
+	u32 version;
+	u32 reserved1;
+	u32 width;
+	u32 height;
+	u32 clk1;
+	u8  b0, b1, b2, b3;
+	u32 clk2;
+	u32 flags;
+	u32 reserved2[3];
+} __packed;
 
 /* Engine PSoC commands (1st byte written before the read phase) */
 #define HSM_PSOC_CMD_ENGINE_ID	0x00	/* returns 4 bytes */
@@ -579,6 +624,39 @@ static int hsm_parse_gpios(struct hsm_ctrl *h, struct device_node *np)
 
 static struct hsm_ctrl *g_hsm;	/* single instance, like the stock driver */
 
+/*
+ * The n670x/n5600 userspace stack (libHsmKil) reads /sys/n5600/camid to learn
+ * which camera index to open via camera_open(). Stock creates a full
+ * /sys/n5600/ interface (camid, model, type, serial, power, ...) from its
+ * scanner kernel driver; libHsmKil only requires "camid". We expose the same
+ * node so the native scan path can find the enumerated sensor.
+ *
+ * Stock values on this device: camid=1, model=29 (0x1d), type="sr",
+ * serial=<engine serial>, power=0.
+ */
+#define HSM_N5600_CAMID		0	/* camera index libHsmKil opens (sole cam) */
+#define HSM_N5600_MODEL		29	/* 0x1d - device type (SetDeviceType) */
+#define HSM_N5600_TYPE		"sr"	/* scanner */
+
+static int hsm_camid = HSM_N5600_CAMID;
+
+static ssize_t hsm_camid_show(struct kobject *k, struct kobj_attribute *a,
+			      char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n", hsm_camid);
+}
+
+static ssize_t hsm_camid_store(struct kobject *k, struct kobj_attribute *a,
+			       const char *buf, size_t n)
+{
+	int v;
+
+	if (kstrtoint(buf, 0, &v) < 0)
+		return -EINVAL;
+	hsm_camid = v;
+	return n;
+}
+
 static ssize_t hsm_serial_show(struct kobject *k, struct kobj_attribute *a,
 			       char *buf)
 {
@@ -587,52 +665,64 @@ static ssize_t hsm_serial_show(struct kobject *k, struct kobj_attribute *a,
 	return scnprintf(buf, PAGE_SIZE, "%s\n", g_hsm->serial);
 }
 
-static ssize_t hsm_chipid_show(struct kobject *k, struct kobj_attribute *a,
-			       char *buf)
+static ssize_t hsm_model_show(struct kobject *k, struct kobj_attribute *a,
+			      char *buf)
 {
-	if (!g_hsm)
-		return -ENODEV;
-	return scnprintf(buf, PAGE_SIZE, "0x%04x\n", g_hsm->chip_id);
+	return scnprintf(buf, PAGE_SIZE, "%d\n", HSM_N5600_MODEL);
 }
 
-static struct kobj_attribute hsm_attr_serial =
-	__ATTR(serial, 0444, hsm_serial_show, NULL);
-static struct kobj_attribute hsm_attr_chipid =
-	__ATTR(chip_id, 0444, hsm_chipid_show, NULL);
+static ssize_t hsm_type_show(struct kobject *k, struct kobj_attribute *a,
+			     char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%s\n", HSM_N5600_TYPE);
+}
 
-/* TODO(phaseB): the stock driver creates 7 sysfs files here (the full
- * ScanSetting control surface: aimer, illuminator, trigger, etc.). Phase A
- * exposes just identity attributes to confirm detection from userspace. */
+/* camid is rw (root/system on stock); the rest are read-only identity. */
+static struct kobj_attribute n5600_attr_camid =
+	__ATTR(camid, 0660, hsm_camid_show, hsm_camid_store);
+static struct kobj_attribute n5600_attr_serial =
+	__ATTR(serial, 0444, hsm_serial_show, NULL);
+static struct kobj_attribute n5600_attr_model =
+	__ATTR(model, 0444, hsm_model_show, NULL);
+static struct kobj_attribute n5600_attr_type =
+	__ATTR(type, 0444, hsm_type_show, NULL);
+
+static struct attribute *n5600_attrs[] = {
+	&n5600_attr_camid.attr,
+	&n5600_attr_serial.attr,
+	&n5600_attr_model.attr,
+	&n5600_attr_type.attr,
+	NULL,
+};
+
+static const struct attribute_group n5600_attr_group = {
+	.attrs = n5600_attrs,
+};
 
 static int hsm_sysfs_create(struct hsm_ctrl *h)
 {
 	int rc;
 
-	h->kobj = kobject_create_and_add("scanner", NULL);
+	/* Name MUST be "n5600" - libHsmKil hardcodes /sys/n5600/camid. */
+	h->kobj = kobject_create_and_add("n5600", NULL);
 	if (!h->kobj)
 		return -ENOMEM;
 
-	rc = sysfs_create_file(h->kobj, &hsm_attr_serial.attr);
-	if (rc)
-		goto err;
-	rc = sysfs_create_file(h->kobj, &hsm_attr_chipid.attr);
+	rc = sysfs_create_group(h->kobj, &n5600_attr_group);
 	if (rc) {
-		sysfs_remove_file(h->kobj, &hsm_attr_serial.attr);
-		goto err;
+		kobject_put(h->kobj);
+		h->kobj = NULL;
+		return rc;
 	}
+	dev_info(h->dev, "/sys/n5600/ created (camid=%d)\n", hsm_camid);
 	return 0;
-err:
-	kobject_put(h->kobj);
-	h->kobj = NULL;
-	return rc;
 }
 
 static void hsm_sysfs_remove(struct hsm_ctrl *h)
 {
 	if (!h->kobj)
 		return;
-	sysfs_remove_file(h->kobj, &hsm_attr_chipid.attr);
-	sysfs_remove_file(h->kobj, &hsm_attr_serial.attr);
+	sysfs_remove_group(h->kobj, &n5600_attr_group);
 	kobject_put(h->kobj);
 	h->kobj = NULL;
 }
@@ -685,6 +775,184 @@ static int hsm_sensor_match_id(struct msm_sensor_ctrl_t *s_ctrl)
 }
 
 /*
+ * Recover our msm_sensor_ctrl_t from a v4l2_subdev. Mirrors the framework's
+ * static get_sctrl(): the subdev is embedded as s_ctrl.msm_sd.sd.
+ */
+static struct msm_sensor_ctrl_t *hsm_get_sctrl(struct v4l2_subdev *sd)
+{
+	return container_of(container_of(sd, struct msm_sd_subdev, sd),
+			    struct msm_sensor_ctrl_t, msm_sd);
+}
+
+/*
+ * v4l2 subdev core ioctl for the imager. Replicates the framework's static
+ * msm_sensor_subdev_ioctl so the mm-qcamera daemon's VIDIOC_MSM_SENSOR_CFG
+ * (and release/shutdown) reach a real handler instead of a NULL op.
+ */
+static long hsm_subdev_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
+{
+	struct msm_sensor_ctrl_t *s_ctrl = hsm_get_sctrl(sd);
+	struct hsm_ctrl *h;
+	void __user *argp = (void __user *)arg;
+
+	if (!s_ctrl) {
+		pr_err("%s: s_ctrl NULL\n", __func__);
+		return -EBADF;
+	}
+	h = to_hsm_ctrl(s_ctrl);
+
+	switch (cmd) {
+	case VIDIOC_MSM_SENSOR_CFG:
+		return s_ctrl->func_tbl->sensor_config(s_ctrl, argp);
+	case VIDIOC_MSM_SENSOR_RELEASE:
+	case MSM_SD_SHUTDOWN:
+		if (s_ctrl->func_tbl->sensor_power_down)
+			s_ctrl->func_tbl->sensor_power_down(s_ctrl);
+		return 0;
+	case MSM_SD_NOTIFY_FREEZE:
+	case MSM_SD_UNNOTIFY_FREEZE:
+		return 0;
+
+	/* ---- custom HSM ioctls (from stock hsm_ioctl_common) ---- */
+	case VIDIOC_HSM_GET_PROPERTIES: {
+		struct hsm_properties p;
+
+		/* arg is a v4l2 ioctl payload; subdev_do_ioctl/video_usercopy
+		 * copies it in/out for us, so 'arg' is a kernel copy. */
+		if (!arg)
+			return -EINVAL;
+		memcpy(&p, arg, sizeof(p));
+		if (p.version != 1) {
+			dev_err(h->dev, "GET_PROPERTIES: bad version=%u\n",
+				p.version);
+			return -EINVAL;
+		}
+		p.width  = h->width  ? h->width  : 1280;
+		p.height = h->height ? h->height : 800;
+		/*
+		 * clk1/clk2 feed the CSI/mclk rate setup in mm-camera. Returning
+		 * 0 caused the kernel CSI clock "set the rate first" failure and
+		 * sensor_set_resolution to fail. The imager mclk is 23.88 MHz
+		 * (DT qcom,mclk-23880000). Report it so the CSI clock gets a rate.
+		 */
+		p.clk1   = 23880000;		/* mclk */
+		p.b0     = HSM_IMAGER_ADDR;	/* 0x18 slave */
+		p.b1     = 0x40;		/* PSoC engine marker */
+		p.b2     = 0;
+		p.b3     = 0;
+		p.clk2   = 23880000;
+		p.flags  = 0x8001;
+		memcpy(arg, &p, sizeof(p));
+		dev_info(h->dev, "GET_PROPERTIES: %ux%u flags=0x%x\n",
+			 p.width, p.height, p.flags);
+		return 0;
+	}
+	case VIDIOC_HSM_SUPPLY_ENABLE: {
+		u8 *b = arg;
+		/* stock: hsm_supply_enable(ctx, arg[1]) */
+		hsm_supply_enable(h, b ? b[1] : 0);
+		return 0;
+	}
+	case VIDIOC_HSM_POWER_STATE: {
+		u8 *b = arg;
+		/* stock: arg[1] = ctx power-state byte (ctx+0x1d8). Report our
+		 * supply state. */
+		if (b)
+			b[1] = h->supply_on ? 1 : 0;
+		return 0;
+	}
+	case VIDIOC_HSM_GPIO_SET: {
+		u8 *b = arg;		/* [0]=gpio id, [1]=value */
+		if (b)
+			hsm_gpio_set(h, b[0], b[1]);
+		return 0;
+	}
+	case VIDIOC_HSM_GPIO_GET: {
+		u8 *b = arg;		/* [0]=gpio id -> [1]=value */
+		if (b)
+			b[1] = hsm_gpio_get(h, b[0]);
+		return 0;
+	}
+	case VIDIOC_HSM_CHANGED_FLAG: {
+		u32 *w = arg;		/* [0]==1 -> [1]=changed flag (we report 0) */
+		if (w && w[0] == 1)
+			w[1] = 0;
+		return 0;
+	}
+	case VIDIOC_HSM_WRITE_IIC:
+	case VIDIOC_HSM_READ_IIC: {
+		/*
+		 * IIC passthrough - libHsmKil configures the engine via these.
+		 * arg layout (12 bytes), from stock hsm_ioctl_common:
+		 *   [0] u8  slave selector (also the i2c addr; 0x0e/0x07 -> the
+		 *           secondary adapter, else the imager's own adapter)
+		 *   [2] u16 register
+		 *   [4] u32 user-space data pointer
+		 *   [8] u8  length
+		 */
+		u32 *w = arg;
+		u8  *b = arg;
+		u8   slave = b[0];
+		u16  reg   = *(u16 *)(b + 2);
+		void __user *uptr = (void __user *)(uintptr_t)w[1];
+		u8   len   = b[8];
+		u8   kbuf[64];
+		struct i2c_adapter *ad = h->adap; /* single adapter on this port */
+		int  rc;
+
+		if (!ad || !uptr || len == 0 || len > sizeof(kbuf))
+			return -EINVAL;
+
+		if (cmd == VIDIOC_HSM_WRITE_IIC) {
+			if (copy_from_user(kbuf, uptr, len))
+				return -EFAULT;
+			rc = hsm_write_reg(ad, slave, reg, kbuf, len);
+			return rc;
+		} else { /* READ_IIC */
+			rc = hsm_read_reg(ad, slave, reg, kbuf, len);
+			if (rc)
+				return rc;
+			if (copy_to_user(uptr, kbuf, len))
+				return -EFAULT;
+			return 0;
+		}
+	}
+	case VIDIOC_HSM_RDRW:
+		/* combined read/write dispatch - implement if exercised */
+		dev_dbg(h->dev, "HSM RDRW ioctl 0x%x (noop)\n", cmd);
+		return 0;
+
+	default:
+		dev_dbg(h->dev, "unknown HSM ioctl 0x%x\n", cmd);
+		return -ENOIOCTLCMD;
+	}
+}
+
+/* s_power routes to our custom hsm power ops (framework calls this on the
+ * subdev; we forward to func_tbl). */
+static int hsm_subdev_s_power(struct v4l2_subdev *sd, int on)
+{
+	struct msm_sensor_ctrl_t *s_ctrl = hsm_get_sctrl(sd);
+
+	if (!s_ctrl)
+		return -EBADF;
+	if (on)
+		return s_ctrl->func_tbl->sensor_power_up ?
+		       s_ctrl->func_tbl->sensor_power_up(s_ctrl) : 0;
+	return s_ctrl->func_tbl->sensor_power_down ?
+	       s_ctrl->func_tbl->sensor_power_down(s_ctrl) : 0;
+}
+
+static struct v4l2_subdev_core_ops hsm_subdev_core_ops = {
+	.ioctl   = hsm_subdev_ioctl,
+	.s_power = hsm_subdev_s_power,
+};
+
+static struct v4l2_subdev_ops hsm_subdev_ops = {
+	.core = &hsm_subdev_core_ops,
+};
+
+/*
  * Register the (already-detected) imager with the MSM camera sensor framework
  * so it appears as a v4l2 subdev the capture pipeline / libHsmKil can stream.
  * Verbose logging pinpoints where msm_sensor_driver_parse fails on first probe
@@ -700,12 +968,27 @@ static int hsm_register_msm_sensor(struct hsm_ctrl *h)
 	s->of_node            = h->client->dev.of_node;
 	s->sensor_device_type = MSM_CAMERA_I2C_DEVICE;
 
-	/* Override only the power/match ops; leave subdev_ops + i2c_func_tbl
-	 * NULL so msm_sensor_init_default_params() fills framework defaults. */
+	/*
+	 * Populate func_tbl. We override the power/match ops with the hsm
+	 * sequence (no DT power-setting array), and MUST also provide
+	 * sensor_config: the subdev CFG ioctl path calls
+	 * func_tbl->sensor_config, and because we supply our own func_tbl the
+	 * framework does not fill its defaults. msm_sensor_config is public.
+	 */
+	h->func_tbl.sensor_config     = msm_sensor_config;
 	h->func_tbl.sensor_power_up   = hsm_sensor_power_up;
 	h->func_tbl.sensor_power_down = hsm_sensor_power_down;
 	h->func_tbl.sensor_match_id   = hsm_sensor_match_id;
 	s->func_tbl = &h->func_tbl;
+
+	/*
+	 * Provide our own v4l2 subdev ops. The framework default
+	 * (msm_sensor_subdev_ops) is static in msm_sensor.c and cannot be
+	 * referenced here, so relying on it left sd->ops->core->ioctl NULL and
+	 * the daemon's VIDIOC_MSM_SENSOR_CFG faulted (PC=0x0). hsm_subdev_ops
+	 * provides a real core.ioctl (hsm_subdev_ioctl) + s_power.
+	 */
+	s->sensor_v4l2_subdev_ops = &hsm_subdev_ops;
 
 	dev_info(h->dev, "hsm_register_msm_sensor: msm_sensor_driver_parse\n");
 	rc = msm_sensor_driver_parse(s);
@@ -714,6 +997,69 @@ static int hsm_register_msm_sensor(struct hsm_ctrl *h)
 		return rc;
 	}
 	dev_info(h->dev, "hsm_register_msm_sensor: parse OK id=%u\n", s->id);
+
+	/*
+	 * Populate sensordata fields that the daemon's config path requires but
+	 * which are normally set only by the SINIT probe path
+	 * (msm_sensor_driver_probe), NOT by msm_sensor_driver_parse which our
+	 * kernel-boot registration uses:
+	 *
+	 *   - sensor_name: msm_sensor_config CFG_GET_SENSOR_INFO does
+	 *     memcpy(..., sensordata->sensor_name, ...) (msm_sensor.c:921).
+	 *     It is a const char * left NULL by parse -> NULL-source memcpy
+	 *     crash. Set it to the DT/HSM name (also why the subdev showed
+	 *     "(null)" earlier).
+	 *   - slave_info: several config/power paths deref sensordata->slave_info
+	 *     (sensor_id_reg_addr, sensor_id, addr_type). Left NULL by parse.
+	 *     Allocate + fill minimally for the N670x (chip-id reg 0x3000,
+	 *     id 0x0356, word addr/data).
+	 */
+	if (s->sensordata && !s->sensordata->sensor_name)
+		s->sensordata->sensor_name = HSM_SENSOR_NAME;
+
+	if (s->sensordata && !s->sensordata->slave_info) {
+		struct msm_camera_slave_info *si;
+
+		si = kzalloc(sizeof(*si), GFP_KERNEL);
+		if (!si) {
+			dev_err(h->dev, "slave_info alloc failed\n");
+			return -ENOMEM;
+		}
+		si->sensor_slave_addr  = HSM_IMAGER_ADDR << 1;
+		si->sensor_id_reg_addr = HSM_N670X_ID_REG;   /* 0x3000 */
+		si->sensor_id          = HSM_N670X_ID_VALUE; /* 0x0356 */
+		s->sensordata->slave_info = si;
+		dev_info(h->dev, "slave_info populated by driver\n");
+	}
+
+	/*
+	 * Ensure sensordata->sensor_info is allocated + populated. The daemon's
+	 * first config ioctl (CFG_GET_SENSOR_INFO) reads sensor_info->session_id,
+	 * subdev_id[], subdev_intf[], position, mount_angle, modes_supported. Our
+	 * registration path can leave sensor_info NULL (observed: crash in
+	 * msm_sensor_config reading sensor_info->session_id). Allocate + fill it
+	 * so the daemon's sensor-info query succeeds.
+	 */
+	if (s->sensordata && !s->sensordata->sensor_info) {
+		unsigned int idx;
+
+		s->sensordata->sensor_info =
+			kzalloc(sizeof(*s->sensordata->sensor_info), GFP_KERNEL);
+		if (!s->sensordata->sensor_info) {
+			dev_err(h->dev, "sensor_info alloc failed\n");
+			return -ENOMEM;
+		}
+		for (idx = 0; idx < SUB_MODULE_MAX; idx++) {
+			s->sensordata->sensor_info->subdev_id[idx]   = -1;
+			s->sensordata->sensor_info->subdev_intf[idx] = -1;
+		}
+		/* populate the fields CFG_GET_SENSOR_INFO returns (from DT) */
+		s->sensordata->sensor_info->is_mount_angle_valid = 1;
+		s->sensordata->sensor_info->sensor_mount_angle   = 0;
+		s->sensordata->sensor_info->position             = 3;
+		s->sensordata->sensor_info->modes_supported      = 1;
+		dev_info(h->dev, "sensor_info allocated by driver\n");
+	}
 
 	if (s->sensor_i2c_client) {
 		s->sensor_i2c_client->client = h->client;
