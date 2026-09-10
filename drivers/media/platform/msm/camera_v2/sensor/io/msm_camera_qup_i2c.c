@@ -284,6 +284,27 @@ int32_t msm_camera_qup_i2c_write_table(struct msm_camera_i2c_client *client,
 	client_addr_type = client->addr_type;
 	client->addr_type = write_setting->addr_type;
 
+	/*
+	 * HSM N670x scan engine has no writable mode/resolution registers.
+	 * The resolution/mode-change path writes dimension values to register
+	 * 0x0 ({0,0}, {0,width}, {0,height}); the engine NACKs all writes to
+	 * reg 0. Stock never issues them. Skip any write whose entries all
+	 * target reg_addr 0 so streamon proceeds; real register writes (nonzero
+	 * addr) are unaffected.
+	 */
+	if (write_setting->size > 0 && reg_setting) {
+		int all_reg0 = 1, k;
+		for (k = 0; k < write_setting->size; k++) {
+			if (reg_setting[k].reg_addr != 0) { all_reg0 = 0; break; }
+		}
+		if (all_reg0) {
+			pr_info("hsm: skip reg0 resolution write (size=%d)\n",
+				write_setting->size);
+			client->addr_type = client_addr_type;
+			return 0;
+		}
+	}	
+
 	for (i = 0; i < write_setting->size; i++) {
 		CDBG("%s addr 0x%x data 0x%x\n", __func__,
 			reg_setting->reg_addr, reg_setting->reg_data);
@@ -334,6 +355,27 @@ int32_t msm_camera_qup_i2c_write_seq_table(struct msm_camera_i2c_client *client,
 	reg_setting = write_setting->reg_setting;
 	client_addr_type = client->addr_type;
 	client->addr_type = write_setting->addr_type;
+
+	/*
+	 * HSM N670x scan engine has no writable mode/resolution registers.
+	 * The resolution/mode-change path writes dimension values to register
+	 * 0x0 ({0,0}, {0,width}, {0,height}); the engine NACKs all writes to
+	 * reg 0. Stock never issues them. Skip any write whose entries all
+	 * target reg_addr 0 so streamon proceeds; real register writes (nonzero
+	 * addr) are unaffected.
+	 */
+	if (write_setting->size > 0 && reg_setting) {
+		int all_reg0 = 1, k;
+		for (k = 0; k < write_setting->size; k++) {
+			if (reg_setting[k].reg_addr != 0) { all_reg0 = 0; break; }
+		}
+		if (all_reg0) {
+			pr_info("hsm: skip reg0 resolution write (size=%d)\n",
+				write_setting->size);
+			client->addr_type = client_addr_type;
+			return 0;
+		}
+	}
 
 	if (reg_setting->reg_data_size > I2C_SEQ_REG_DATA_MAX) {
 		pr_err("%s: number of bytes %u exceeding the max supported %d\n",
